@@ -1,0 +1,13 @@
+dspy>=3.0.0
+pydantic>=2.0.0
+typer>=0.9.0
+rich>=13.0.0
+tqdm
+scikit-learn
+pandas
+datasets
+numpy
+wandb
+pyyaml
+optuna
+shap
