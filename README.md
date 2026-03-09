@@ -2,7 +2,7 @@
 
 <div align="center">
 
-[Adrian Cosma](https://scholar.google.com/citations?user=5ZNf7fgAAAAJ&hl=en), [Oleg Szehr](https://scholar.google.com/citations?user=Yiie6xUAAAAJ&hl=en&oi=ao), [David Kletz](https://scholar.google.com/citations?user=9nTkji8AAAAJ&hl=en&oi=ao), [Alessandro Antonucci](https://scholar.google.com/citations?user=0uOsJggAAAAJ&hl=en&oi=ao), Olivier Pelletier
+[Adrian Cosma](https://scholar.google.com/citations?user=cdYk_RUAAAAJ&hl=en), [Oleg Szehr](https://scholar.google.com/citations?user=Yiie6xUAAAAJ&hl=en&oi=ao), [David Kletz](https://scholar.google.com/citations?user=9nTkji8AAAAJ&hl=en&oi=ao), [Alessandro Antonucci](https://scholar.google.com/citations?user=0uOsJggAAAAJ&hl=en&oi=ao), Olivier Pelletier
 </div>
 
 <div align="center">
