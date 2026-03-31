@@ -2,9 +2,9 @@ import os
 import dspy
 import numpy as np
 import optuna
+import random
 from factories import DATASETS
 from dspy.propose import GroundedProposer
-from batch_sampler import KSampler
 from optuna.distributions import CategoricalDistribution
 from dspy.teleprompt.utils import (get_signature, set_signature,
                                    print_full_program)
@@ -24,8 +24,6 @@ class PerBagMIPROOptimizer(Teleprompter):
     def __init__(self, args, metric, **kwargs):
         self.args = args
         self.metric = metric
-        self.compiled = False
-        self.sampler = None
 
     def evaluate_bags(self, program, bags, valset, bag_indices):
         bag_scores = []
@@ -46,48 +44,7 @@ class PerBagMIPROOptimizer(Teleprompter):
 
         return bag_scores
 
-    def _train_sampler(self, program, example_trainset, example_annotation_set):
-        if self.args.dont_train_sampler:
-            print("::: Skipping sampler training as per configuration.")
-            return []
-
-        assert False, "Disabled for now!"
-        print(f"Running sampling for {self.args.demo_rounds} rounds of {self.args.bags // 4} bags each...")
-        for round_idx in range(len(self.sampler.history), self.args.demo_rounds):
-            bags = []
-            bag_indices = []
-
-            for _ in range(self.args.bags // 4):  # Reduced number of bags per round for efficiency
-                indices = self.sampler.sample(k = self.args.max_examples_per_bag)
-                sampled_example_trainset = [example_trainset[i] for i in indices]
-
-                bag_indices.append(indices)
-                bags.append(sampled_example_trainset)
-
-            # Score each batch and update sampler.
-            print(f":::: Evaluating bag rounds ... {round_idx} / {self.args.demo_rounds}")
-            bag_scores = self.evaluate_bags(program, bags, example_annotation_set, bag_indices)
-
-            # check if bag scores are not empty of all zeroes
-            if len(bag_scores) == 0 or all(score == 0.0 for score, _ in bag_scores):
-                print(f"{YELLOW} Warning: All bag scores are zero or no scores were computed. Skipping sampler update for this round.{ENDC}")
-                continue
-
-            self.sampler.history.append({'round': round_idx, 'bag_indices': bag_indices, 'bag_scores': [b for b, _ in bag_scores], 'extended_scores': [ext for _, ext in bag_scores]})
-            print(f"::: Average bag score this round: {np.mean([b for b, _ in bag_scores])} ± {np.std([b for b, _ in bag_scores])}")
-
-            self.sampler.update_many(list(zip(bag_indices, [b for b, _ in bag_scores])))
-            self.sampler.save()
-            print(self.sampler.w)
-
-        print("::: Sampling complete.")
-
-        with open(f'checkpoints/{self.args.experiment_name}/sampler_history.json', 'w') as f:
-            json.dump(self.sampler.history, f, indent = 4)
-
-        return self.sampler.history
-
-    def _propose_instructions(self, program, trainset, valset, demo_candidates, trial_logs, N):
+    def _propose_instructions(self, program, trainset, valset, demo_candidates, trial_logs, N, existing_instruction_candidates = None):
         print("::: Proposing instruction candidates using the grounded proposer...")
         proposer = GroundedProposer(
             program = program,
@@ -107,42 +64,23 @@ class PerBagMIPROOptimizer(Teleprompter):
         )
 
         instruction_candidates = proposer.propose_instructions_for_program(trainset = trainset, program = program, demo_candidates = demo_candidates, trial_logs = trial_logs, N = N)
-
+    
         return instruction_candidates
 
-    def compile(self, program, trainset, valset, annotation_set, train_sampler = True, **kwargs):
-        if self.compiled:
-            print('[👑] Program already compiled. Tuning further, but starting from the previously trained sampler.')
-
+    def compile(self, program, trainset, valset, annotation_set = True, **kwargs):
         example_trainset = [dspy.Example(text = example['text'], label = DATASETS[self.args.dataset]['class_map'][example['label']]).with_inputs('text', 'label') for example in trainset]
+        example_valset = [dspy.Example(text = example['text'], label = DATASETS[self.args.dataset]['class_map'][example['label']]).with_inputs('text', 'label') for example in valset]
         example_annotation_set = [dspy.Example(text = example['text'], label = DATASETS[self.args.dataset]['class_map'][example['label']]).with_inputs('text', 'label') for example in annotation_set]
 
-        # # Step 1: Train the sampler to find the best demo candidates.
-        if self.sampler is None:
-            self.sampler = KSampler(self.args, n_items = len(example_trainset))
-
-        if not train_sampler:
-            self.sampler = self.sampler.load(self.args.sampler_checkpoint_path)
-
-        if self.sampler is None:
-            self.sampler = KSampler(self.args, n_items = len(example_trainset))
-            self._train_sampler(program, example_trainset, example_annotation_set)
-        else:
-            print("::: Loaded pretrained sampler.")
-            if len(self.sampler.history) < self.args.demo_rounds:
-                self.sampler.n_updates = len(self.sampler.history)
-                print(f"::: Loaded sampler is not fully trained ({len(self.sampler.history)}/{self.args.demo_rounds}), continuing training...")
-                self._train_sampler(program, example_trainset, example_annotation_set)
-    
         # if exists and is not empty
         if os.path.exists(f'checkpoints/{self.args.experiment_name}/demo_idxs.json') and os.path.getsize(f'checkpoints/{self.args.experiment_name}/demo_idxs.json') > 0:
             print("::: Loading demo candidates from disk.")
             with open(f'checkpoints/{self.args.experiment_name}/demo_idxs.json', 'r') as f:
                 best_demos_idxs = json.load(f)
         else:
-            print("::: Identifying best demo candidates using the trained sampler...")
-            best_demos_idxs = [self.sampler.sample(k = self.args.max_examples_per_bag, explore = False) for _ in range(self.args.bags)]
-            scores = [self.sampler.estimate_set_score(best_demos_idx) for best_demos_idx in best_demos_idxs]
+            print("::: Identifying best demo candidates...")
+            best_demos_idxs = [random.sample(range(len(example_trainset)), self.args.max_examples_per_bag) for _ in range(self.args.bags)]
+            scores = [0.0 for _ in range(len(best_demos_idxs))]
 
             # sort best_demo_idxs by scores descending
             best_demos_idxs = [x for _, x in sorted(zip(scores, best_demos_idxs), key = lambda pair: pair[0], reverse = False)]
@@ -155,14 +93,16 @@ class PerBagMIPROOptimizer(Teleprompter):
         best_demos = [[example_trainset[i] for i in best_demos_idxs[j]] for j in range(len(best_demos_idxs))]
         best_demos = {0: best_demos}
 
+        instruction_candidates = None
         if os.path.exists(f'checkpoints/{self.args.experiment_name}/instruction_candidates.json') and os.path.getsize(f'checkpoints/{self.args.experiment_name}/instruction_candidates.json') > 0:
             print("::: Loading instruction candidates from disk.")
             with open(f'checkpoints/{self.args.experiment_name}/instruction_candidates.json', 'r') as f:
                 instruction_candidates = json.load(f)
                 instruction_candidates = {int(k): v for k, v in instruction_candidates.items()}
-        else:
+
+        if instruction_candidates is None or len(instruction_candidates[0]) != len(best_demos[0]):
             # Step 2: Using the demos, propose instructions using the feature proposer.
-            instruction_candidates = self._propose_instructions(program = program, trainset = example_trainset, valset = example_annotation_set, demo_candidates = best_demos, trial_logs = {}, N = len(best_demos[0]))
+            instruction_candidates = self._propose_instructions(program = program, trainset = example_trainset, valset = example_annotation_set, demo_candidates = best_demos, trial_logs = {}, N = len(best_demos[0]), existing_instruction_candidates = instruction_candidates)
 
             with open(f'checkpoints/{self.args.experiment_name}/instruction_candidates.json', 'w') as f:
                 json.dump(instruction_candidates, f, indent = 4)
@@ -229,6 +169,7 @@ class PerBagMIPROOptimizer(Teleprompter):
         score_data = []
         best_score = -float('inf')
         best_program = None
+        best_features = None
         trials_so_far = 0
 
         if not (os.path.exists(f'./checkpoints/{self.args.experiment_name}/optimization_logs.json') and os.path.getsize(f'./checkpoints/{self.args.experiment_name}/optimization_logs.json') > 0):
@@ -240,7 +181,6 @@ class PerBagMIPROOptimizer(Teleprompter):
 
             try:
                 pred_features = [program(texts = [f"{example['text']}\nLabel: {example['label']}" for example in the_demos])]  # one to many
-                # pred_features = [program(texts = [f"{example['text']}" for example in the_demos])]  # one to many
                 dspy.inspect_history(n = 3)
                 score = self.metric(annotation_set, pred_features)
                 default_score = score
@@ -273,7 +213,7 @@ class PerBagMIPROOptimizer(Teleprompter):
 
         # Define the objective function
         def objective(trial):
-            nonlocal program, best_program, best_score, trial_logs, score_data
+            nonlocal program, best_program, best_score, trial_logs, score_data, best_features
 
             trial_num = trial.number + 1
             print(f"===== Trial {trial_num} / {num_trials} =====")
@@ -304,7 +244,6 @@ class PerBagMIPROOptimizer(Teleprompter):
             ################################################
             try:
                 pred_features = [candidate_program(texts = [f"{example['text']}\nLabel: {example['label']}" for example in the_demos])]  # one to many
-                # pred_features = [candidate_program(texts = [f"{example['text']}" for example in the_demos])]  # one to many
             except Exception as e:
                 print(f"{YELLOW} Warning: Exception during prediction: {e}{ENDC}")
                 if "litellm.APIError: APIError: Hosted_vllmException - Connection error" in str(e):
@@ -329,6 +268,7 @@ class PerBagMIPROOptimizer(Teleprompter):
             if score > best_score:
                 best_score = score
                 best_program = candidate_program.deepcopy()
+                best_features = pred_features[0]
 
                 best_program.save(f'checkpoints/{self.args.experiment_name}/best_program:{trial_num}:{best_score}.json')
                 print(f"{GREEN}Best full score so far!{ENDC} Score: {score}")
@@ -373,4 +313,5 @@ class PerBagMIPROOptimizer(Teleprompter):
             best_program.score = best_score
 
         print(f"Returning best identified program with score {best_score}!")
-        return best_program, score_data, self.sampler.history
+
+        return best_program, score_data, best_features
