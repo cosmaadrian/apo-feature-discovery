@@ -7,7 +7,7 @@ class PerBagMIPROWithFeedbackOptimizer(PerBagMIPROOptimizer):
     def __init__(self, args, metric, mirpo_params = {}):
         super().__init__(args, metric, **mirpo_params)
 
-    def _propose_instructions(self, program, trainset, valset, demo_candidates, trial_logs, N):
+    def _propose_instructions(self, program, trainset, valset, demo_candidates, trial_logs, N, **kwargs):
         # Use the reflective instruction proposer that receives text feedback on the output.
         # It receives as input the metric and a validation set to guide the proposals.
         # Current instruction, summary of demos, the output features on this input and the metric output. Returns a proposed new instruction.
@@ -27,6 +27,7 @@ class PerBagMIPROWithFeedbackOptimizer(PerBagMIPROOptimizer):
             valset = valset,
             metric = self.metric,
             N = N,
+            **kwargs,
         )
 
         return instruction_candidates

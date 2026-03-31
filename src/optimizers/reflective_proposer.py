@@ -1,4 +1,7 @@
+import json
+
 import dspy
+import tqdm
 import random
 from dspy.propose.utils import strip_prefix, get_dspy_source_code
 from dspy.teleprompt.utils import get_signature, get_prompt_model, set_signature
@@ -89,14 +92,20 @@ class ReflectiveProposer():
         if self.verbose:
             print(f"MODULE DESCRIPTION: {self.module_description}")
 
-    def propose_instructions(self, demo_candidates, valset, metric, N = -1):
+        print(dspy.inspect_history(n = 10))
+
+    def propose_instructions(self, demo_candidates, valset, metric, existing_instruction_candidates = None, N = -1):
         n_iters = self.args.reflection_iter 
 
-        instruction_candidates = {0: []}
+        if existing_instruction_candidates is not None:
+            instruction_candidates = existing_instruction_candidates
+        else:
+            instruction_candidates = {0: []}
+
 
         basic_instruction = get_signature(self.program.predictors()[0]).instructions
 
-        for i, demos in enumerate(demo_candidates[0]):
+        for i, demos in enumerate(tqdm.tqdm(demo_candidates[0])):
             current_instruction = basic_instruction
             for iter_idx in range(n_iters):
                 updated_signature = get_signature(self.program.predictors()[0]).with_instructions(current_instruction)
@@ -137,5 +146,8 @@ class ReflectiveProposer():
                 print(f"[ReflectiveProposer [iter {iter_idx}/{n_iters}] {i}/{len(demo_candidates[0])}] Instruction:{BLUE}{proposed_instruction}{ENDC}")
 
             instruction_candidates[0].append(current_instruction)
+            
+            with open(f'checkpoints/{self.args.experiment_name}/instruction_candidates.json', 'w') as f:
+                json.dump(instruction_candidates, f, indent = 4)
 
         return instruction_candidates
